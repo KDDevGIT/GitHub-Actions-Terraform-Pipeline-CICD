@@ -1,0 +1,77 @@
+name: Terraform Plan
+
+
+on:
+pull_request:
+paths:
+- 'infra/**'
+workflow_dispatch:
+inputs:
+environment:
+description: 'Environment to plan (dev|prod)'
+required: true
+default: 'dev'
+
+
+permissions:
+id-token: write # needed for OIDC
+contents: read
+pull-requests: write
+
+
+jobs:
+plan:
+runs-on: ubuntu-latest
+strategy:
+matrix:
+env: [dev, prod]
+if: ${{ github.event_name == 'workflow_dispatch' || github.event_name == 'pull_request' }}
+steps:
+- uses: actions/checkout@v4
+
+
+- name: Setup Terraform
+uses: hashicorp/setup-terraform@v3
+with:
+terraform_version: 1.9.5
+
+
+- name: Configure AWS credentials
+uses: aws-actions/configure-aws-credentials@v4
+with:
+role-to-assume: ${{ secrets.AWS_ROLE_TO_ASSUME }}
+aws-region: ${{ vars.AWS_REGION }}
+
+
+- name: Cache .terraform
+uses: actions/cache@v4
+with:
+path: infra/envs/${{ matrix.env }}/.terraform
+key: ${{ runner.os }}-tf-${{ matrix.env }}-${{ hashFiles('infra/envs/**/.terraform.lock.hcl') }}
+
+
+- name: Terraform fmt (check)
+working-directory: infra/envs/${{ matrix.env }}
+run: terraform fmt -check -recursive
+
+
+- name: Terraform init
+working-directory: infra/envs/${{ matrix.env }}
+run: |
+terraform init \
+-backend-config="bucket=${{ vars.TF_BACKEND_BUCKET }}" \
+-backend-config="key=${{ matrix.env }}/terraform.tfstate" \
+-backend-config="region=${{ vars.AWS_REGION }}" \
+-backend-config="dynamodb_table=${{ vars.TF_BACKEND_TABLE }}"
+
+
+- name: Terraform validate
+working-directory: infra/envs/${{ matrix.env }}
+run: terraform validate
+
+
+# Optional linters (uncomment after installing tools):
+# - name: TFLint
+# uses: terraform-linters/setup-tflint@v4
+# - name: Run tflint
+path: infra/envs/${{ matrix.env }}/plan.txt
