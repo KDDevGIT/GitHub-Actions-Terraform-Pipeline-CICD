@@ -1,0 +1,67 @@
+name: Terraform Apply
+
+
+on:
+push:
+branches: [main]
+paths:
+- 'infra/**'
+workflow_dispatch:
+inputs:
+environment:
+description: 'Environment to apply (dev|prod)'
+required: true
+default: 'dev'
+
+
+permissions:
+id-token: write
+contents: read
+
+
+env:
+TF_CLI_ARGS_apply: -auto-approve
+
+
+jobs:
+choose-env:
+runs-on: ubuntu-latest
+outputs:
+env: ${{ steps.pick.outputs.env }}
+steps:
+- id: pick
+run: |
+if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+echo "env=${{ github.event.inputs.environment }}" >> "$GITHUB_OUTPUT"
+else
+# Simple heuristic: apply both; you can refine with path filters
+echo "env=both" >> "$GITHUB_OUTPUT"
+fi
+
+
+apply-dev:
+needs: choose-env
+if: ${{ needs.choose-env.outputs.env == 'dev' || needs.choose-env.outputs.env == 'both' }}
+runs-on: ubuntu-latest
+environment: dev
+steps:
+- uses: actions/checkout@v4
+- uses: hashicorp/setup-terraform@v3
+with: { terraform_version: 1.9.5 }
+- uses: aws-actions/configure-aws-credentials@v4
+with:
+role-to-assume: ${{ secrets.AWS_ROLE_TO_ASSUME }}
+aws-region: ${{ vars.AWS_REGION }}
+- uses: actions/cache@v4
+with:
+path: infra/envs/dev/.terraform
+key: ${{ runner.os }}-tf-dev-${{ hashFiles('infra/envs/**/.terraform.lock.hcl') }}
+- name: Init
+working-directory: infra/envs/dev
+run: |
+terraform init \
+-backend-config="bucket=${{ vars.TF_BACKEND_BUCKET }}" \
+-backend-config="key=dev/terraform.tfstate" \
+-backend-config="region=${{ vars.AWS_REGION }}" \
+-backend-config="dynamodb_table=${{ vars.TF_BACKEND_TABLE }}"
+run: terraform apply tfplan.bin
